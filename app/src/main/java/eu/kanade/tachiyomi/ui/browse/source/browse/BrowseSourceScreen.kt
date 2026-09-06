@@ -119,22 +119,21 @@ data class BrowseSourceScreen(
         val mangaList = viewModel.mangaPagerFlowFlow.collectAsLazyPagingItems()
 
         var showImportDialog by remember { mutableStateOf(false) }
-        var importMangaName by remember { mutableStateOf<String?>(null) }
-        val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            val mangaName = importMangaName
-            importMangaName = null
-            val localSource = source as? LocalSource
-            if (uris.isEmpty() || mangaName == null || localSource == null) return@rememberLauncherForActivityResult
-
+        val showImportResult: (suspend () -> tachiyomi.source.local.ImportResult) -> Unit = { importAction ->
             scope.launch {
                 try {
-                    val result = localSource.importChapterFiles(mangaName, uris)
-                    val message = if (result.imported > 0) {
-                        context.i18nStringResource(MR.strings.local_source_import_success, result.imported)
+                    val result = importAction()
+                    val changed = result.imported + result.updated
+                    val message = if (changed > 0) {
+                        context.i18nStringResource(
+                            MR.strings.local_source_import_success,
+                            result.imported,
+                            result.updated,
+                        )
                     } else {
                         context.i18nStringResource(MR.strings.local_source_import_unsupported)
                     }
-                    if (result.imported > 0) mangaList.refresh()
+                    if (changed > 0) mangaList.refresh()
                     snackbarHostState.showSnackbar(message)
                 } catch (_: Throwable) {
                     snackbarHostState.showSnackbar(
@@ -142,6 +141,16 @@ data class BrowseSourceScreen(
                     )
                 }
             }
+        }
+        val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            val localSource = source as? LocalSource
+            if (uris.isEmpty() || localSource == null) return@rememberLauncherForActivityResult
+            showImportResult { localSource.importFiles(uris) }
+        }
+        val importFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            val localSource = source as? LocalSource
+            if (uri == null || localSource == null) return@rememberLauncherForActivityResult
+            showImportResult { localSource.importFolder(uri) }
         }
         val onImportClick = { showImportDialog = true }
 
@@ -281,10 +290,13 @@ data class BrowseSourceScreen(
         if (showImportDialog) {
             LocalSourceImportDialog(
                 onDismissRequest = { showImportDialog = false },
-                onConfirm = { mangaName ->
+                onChooseFiles = {
                     showImportDialog = false
-                    importMangaName = mangaName
                     importFiles.launch(LOCAL_SOURCE_IMPORT_MIME_TYPES)
+                },
+                onChooseFolder = {
+                    showImportDialog = false
+                    importFolder.launch(null)
                 },
             )
         }

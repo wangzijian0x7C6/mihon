@@ -43,6 +43,39 @@ class EpubReader private constructor(
     }
 
     /**
+     * Returns the publication title declared by the EPUB package, if present.
+     */
+    fun getTitle(): String? {
+        val ref = getPackageHref()
+        return getPackageDocument(ref)
+            .getElementsByTag("dc:title")
+            .first()
+            ?.text()
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+    }
+
+    /**
+     * Returns the image declared as the EPUB cover. Supports both the EPUB 2
+     * `meta name="cover"` convention and EPUB 3's `cover-image` property.
+     */
+    fun getCoverImage(): String? {
+        val ref = getPackageHref()
+        val doc = getPackageDocument(ref)
+        val manifest = getManifest(doc)
+
+        val coverId = doc.select("metadata > meta[name=cover]")
+            .firstOrNull()
+            ?.attr("content")
+            ?.takeIf(String::isNotBlank)
+        val coverItem = coverId?.let(manifest::get)
+            ?: manifest.values.firstOrNull { "cover-image" in it.properties }
+            ?: return null
+
+        return getImagesFromManifestItems(listOf(coverItem), ref).firstOrNull()
+    }
+
+    /**
      * Returns the path to the package document.
      */
     fun getPackageHref(): String {
@@ -72,20 +105,28 @@ class EpubReader private constructor(
      * Returns all the items in the epub's reading order.
      */
     private fun getReadingOrder(document: Document): List<ManifestItem> {
-        val manifest = document.select("manifest > item")
+        val manifest = getManifest(document)
+
+        val spine = document.select("spine > itemref").map { it.attr("idref") }
+        return spine.mapNotNull(manifest::get)
+    }
+
+    private fun getManifest(document: Document): Map<String, ManifestItem> {
+        return document.select("manifest > item")
             .mapNotNull { node ->
                 val id = node.attr("id")
                 val href = node.attr("href")
                 if (id.isBlank() || href.isBlank()) {
                     null
                 } else {
-                    id to ManifestItem(href, node.attr("media-type"))
+                    id to ManifestItem(
+                        href = href,
+                        mediaType = node.attr("media-type"),
+                        properties = node.attr("properties").splitToSequence(' ').filter(String::isNotBlank).toSet(),
+                    )
                 }
             }
             .toMap()
-
-        val spine = document.select("spine > itemref").map { it.attr("idref") }
-        return spine.mapNotNull(manifest::get)
     }
 
     /**
@@ -93,6 +134,10 @@ class EpubReader private constructor(
      * reference images directly from the spine instead of wrapping them in XHTML.
      */
     private fun getImagesFromReadingOrder(items: List<ManifestItem>, packageHref: String): List<String> {
+        return getImagesFromManifestItems(items, packageHref)
+    }
+
+    private fun getImagesFromManifestItems(items: List<ManifestItem>, packageHref: String): List<String> {
         val basePath = getParentDirectory(packageHref)
         return items.flatMap { item ->
             val entryPath = resolveZipPath(basePath, item.href)
@@ -156,7 +201,9 @@ class EpubReader private constructor(
         combinedPath.split('/').forEach { segment ->
             when (segment) {
                 "", "." -> Unit
-                ".." -> if (resolvedSegments.isNotEmpty()) resolvedSegments.removeLast()
+                // MutableList.removeLast() is a Java 21 API on recent Kotlin/JDK
+                // toolchains and crashes on older Android versions at runtime.
+                ".." -> if (resolvedSegments.isNotEmpty()) resolvedSegments.removeAt(resolvedSegments.lastIndex)
                 else -> resolvedSegments.add(segment)
             }
         }
@@ -180,6 +227,7 @@ class EpubReader private constructor(
     private data class ManifestItem(
         val href: String,
         val mediaType: String,
+        val properties: Set<String>,
     ) {
         fun isImage(): Boolean {
             return mediaType.startsWith("image/", ignoreCase = true) ||

@@ -728,10 +728,10 @@
     <string name="has_results">Has results</string>
     <string name="local_source_help_guide">Local source guide</string>
     <string name="action_import_local_manga">Import local manga</string>
-    <string name="action_choose_files">Choose files</string>
-    <string name="local_source_import_manga_name">Manga name</string>
-    <string name="local_source_import_description">Selected EPUB/CBZ files will be copied into this local manga as chapters.</string>
-    <string name="local_source_import_success">Imported %1$d chapter file(s)</string>
+    <string name="local_source_import_description">Import multiple files as separate manga, or import a folder as one manga with multiple chapters. Importing again adds or updates chapters.</string>
+    <string name="local_source_import_files">Choose EPUB/CBZ files</string>
+    <string name="local_source_import_folder">Choose manga folder</string>
+    <string name="local_source_import_success">Imported %1$d and updated %2$d chapter file(s)</string>
     <string name="local_source_import_unsupported">No supported EPUB or CBZ files were selected</string>
     <string name="local_source_import_failed">Could not import local manga</string>
     <string name="no_pinned_sources">You have no pinned sources</string>

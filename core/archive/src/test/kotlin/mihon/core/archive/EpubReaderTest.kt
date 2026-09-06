@@ -1,10 +1,20 @@
 package mihon.core.archive
 
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 
 class EpubReaderTest {
+
+    @Test
+    fun `does not link the Android-incompatible Java List removeLast method`() {
+        val bytecode = requireNotNull(
+            EpubReader::class.java.getResourceAsStream("/mihon/core/archive/EpubReader.class"),
+        ).use { it.readBytes().toString(Charsets.ISO_8859_1) }
+
+        bytecode shouldNotContain "removeLast"
+    }
 
     @Test
     fun `reads wrapped and direct image pages in spine order`() {
@@ -97,6 +107,45 @@ class EpubReaderTest {
         )
 
         reader.getImagesFromPages() shouldBe emptyList()
+    }
+
+    @Test
+    fun `reads title and epub 3 cover outside the spine`() {
+        val reader = epubReader(
+            "META-INF/container.xml" to container("OPS/package.opf"),
+            "OPS/package.opf" to """
+                <package xmlns:dc="http://purl.org/dc/elements/1.1/">
+                    <metadata><dc:title>  My Comic  </dc:title></metadata>
+                    <manifest>
+                        <item id="cover" href="images/cover.webp" media-type="image/webp" properties="nav cover-image"/>
+                        <item id="page" href="images/page.jpg" media-type="image/jpeg"/>
+                    </manifest>
+                    <spine><itemref idref="page"/></spine>
+                </package>
+            """.trimIndent(),
+        )
+
+        reader.getTitle() shouldBe "My Comic"
+        reader.getCoverImage() shouldBe "OPS/images/cover.webp"
+    }
+
+    @Test
+    fun `reads epub 2 cover page metadata`() {
+        val reader = epubReader(
+            "META-INF/container.xml" to container("content.opf"),
+            "content.opf" to """
+                <package>
+                    <metadata><meta name="cover" content="cover-page"/></metadata>
+                    <manifest>
+                        <item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>
+                    </manifest>
+                    <spine/>
+                </package>
+            """.trimIndent(),
+            "cover.xhtml" to "<html><body><img src=\"images/cover.jpg\"/></body></html>",
+        )
+
+        reader.getCoverImage() shouldBe "images/cover.jpg"
     }
 
     private fun epubReader(vararg entries: Pair<String, String>): EpubReader {

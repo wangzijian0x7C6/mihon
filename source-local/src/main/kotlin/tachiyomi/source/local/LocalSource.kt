@@ -80,51 +80,90 @@ class LocalSource(
     override val supportsLatest: Boolean = true
 
     /**
-     * Copies user-selected EPUB/CBZ files into a manga folder in the local source.
-     * Files keep their display names and are de-duplicated instead of overwritten.
+     * Imports each selected EPUB/CBZ as a local manga. EPUB titles are read from
+     * package metadata; filenames are used as a fallback and for CBZ files.
+     * Re-importing a file updates the existing chapter instead of creating a duplicate.
      */
-    suspend fun importChapterFiles(mangaName: String, uris: List<Uri>): ImportResult = withIOContext {
-        val safeMangaName = sanitizeFileName(mangaName)
-        require(safeMangaName.isNotBlank())
+    suspend fun importFiles(uris: List<Uri>): ImportResult = withIOContext {
+        var result = ImportResult()
+        uris.forEach { uri ->
+            val displayName = getDisplayName(uri)
+            if (!isSupportedImport(displayName)) {
+                result = result.copy(skipped = result.skipped + 1)
+                return@forEach
+            }
 
+            val source = UniFile.fromUri(context, uri)
+                ?: error("Unable to open selected chapter file")
+            val metadataTitle = if (displayName.substringAfterLast('.', "").equals("epub", true)) {
+                runCatching { source.epubReader(context).use { it.getTitle() } }.getOrNull()
+            } else {
+                null
+            }
+            val fallbackTitle = displayName.substringBeforeLast('.', displayName)
+            val mangaName = sanitizeFileName(metadataTitle ?: fallbackTitle)
+                .takeIf(String::isNotBlank)
+                ?: error("Unable to determine local manga name")
+
+            result += importIntoManga(mangaName, listOf(source to displayName))
+        }
+        result
+    }
+
+    /**
+     * Imports all supported files at the top level of a selected directory as
+     * chapters of one manga. Selecting the same directory later adds new files
+     * and updates matching files in place, preserving chapter URLs/read history.
+     */
+    suspend fun importFolder(uri: Uri): ImportResult = withIOContext {
+        val directory = UniFile.fromUri(context, uri)
+            ?.takeIf { it.isDirectory }
+            ?: error("Unable to open selected manga directory")
+        val mangaName = sanitizeFileName(directory.name ?: getDisplayName(uri))
+            .takeIf(String::isNotBlank)
+            ?: error("Unable to determine local manga name")
+        val files = directory.listFiles().orEmpty()
+            .filter { !it.isDirectory && isSupportedImport(it.name.orEmpty()) }
+            .map { it to it.name.orEmpty() }
+
+        if (files.isEmpty()) {
+            ImportResult(skipped = directory.listFiles().orEmpty().count { !it.isDirectory })
+        } else {
+            importIntoManga(mangaName, files)
+        }
+    }
+
+    private fun importIntoManga(mangaName: String, files: List<Pair<UniFile, String>>): ImportResult {
         val baseDirectory = fileSystem.getBaseDirectory()
             ?: error("Local source directory is unavailable")
-        val existing = baseDirectory.findFile(safeMangaName)
+        val existingDirectory = baseDirectory.findFile(mangaName)
         val mangaDirectory = when {
-            existing == null -> baseDirectory.createDirectory(safeMangaName)
-            existing.isDirectory -> existing
+            existingDirectory == null -> baseDirectory.createDirectory(mangaName)
+            existingDirectory.isDirectory -> existingDirectory
             else -> null
         } ?: error("Unable to create local manga directory")
 
         var imported = 0
-        var skipped = 0
+        var updated = 0
+        files.forEach { (source, sourceName) ->
+            val targetName = sanitizeFileName(sourceName)
+            if (targetName.isBlank() || !isSupportedImport(targetName)) return@forEach
 
-        uris.forEach { uri ->
-            val displayName = getDisplayName(uri)
-            val extension = displayName.substringAfterLast('.', "").lowercase()
-            if (extension !in IMPORT_EXTENSIONS) {
-                skipped++
-                return@forEach
-            }
-
-            val targetName = findAvailableFileName(mangaDirectory, sanitizeFileName(displayName))
-            val target = mangaDirectory.createFile(targetName)
+            val existingFile = mangaDirectory.findFile(targetName)
+            val target = existingFile ?: mangaDirectory.createFile(targetName)
                 ?: error("Unable to create imported chapter file")
-
             try {
-                val input = context.contentResolver.openInputStream(uri)
-                    ?: error("Unable to open selected chapter file")
-                input.use { source ->
-                    target.openOutputStream().use(source::copyTo)
+                source.openInputStream().use { input ->
+                    target.openOutputStream().use(input::copyTo)
                 }
-                imported++
+                if (existingFile == null) imported++ else updated++
             } catch (e: Throwable) {
-                target.delete()
+                if (existingFile == null) target.delete()
                 throw e
             }
         }
 
-        ImportResult(imported, skipped)
+        return ImportResult(imported = imported, updated = updated, manga = 1)
     }
 
     private fun getDisplayName(uri: Uri): String {
@@ -145,21 +184,8 @@ class LocalSource(
             .trim('.')
     }
 
-    private fun findAvailableFileName(directory: UniFile, requestedName: String): String {
-        if (directory.findFile(requestedName) == null) return requestedName
-
-        val extension = requestedName.substringAfterLast('.', "")
-        val baseName = requestedName.substringBeforeLast('.', requestedName)
-        var index = 2
-        while (true) {
-            val candidate = if (extension.isBlank()) {
-                "$baseName ($index)"
-            } else {
-                "$baseName ($index).$extension"
-            }
-            if (directory.findFile(candidate) == null) return candidate
-            index++
-        }
+    private fun isSupportedImport(name: String): Boolean {
+        return name.substringAfterLast('.', "").lowercase() in IMPORT_EXTENSIONS
     }
 
     // Browse related
@@ -449,7 +475,7 @@ class LocalSource(
                 }
                 is Format.Epub -> {
                     format.file.epubReader(context).use { epub ->
-                        val entry = epub.getImagesFromPages().firstOrNull()
+                        val entry = epub.getCoverImage() ?: epub.getImagesFromPages().firstOrNull()
 
                         entry?.let { coverManager.update(manga, epub.getInputStream(it)!!) }
                     }
@@ -472,9 +498,18 @@ class LocalSource(
 }
 
 data class ImportResult(
-    val imported: Int,
-    val skipped: Int,
-)
+    val imported: Int = 0,
+    val updated: Int = 0,
+    val skipped: Int = 0,
+    val manga: Int = 0,
+) {
+    operator fun plus(other: ImportResult) = ImportResult(
+        imported = imported + other.imported,
+        updated = updated + other.updated,
+        skipped = skipped + other.skipped,
+        manga = manga + other.manga,
+    )
+}
 
 fun Manga.isLocal(): Boolean = source == LocalSource.ID
 
