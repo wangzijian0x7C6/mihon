@@ -62,7 +62,6 @@ import mihon.icons.materialsymbols.rounded.NewReleases
 import mihon.icons.materialsymbols.roundedfilled.Favorite
 import mihon.presentation.core.util.collectAsLazyPagingItems
 import tachiyomi.core.common.Constants
-import tachiyomi.core.common.i18n.stringResource as i18nStringResource
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.domain.source.model.StubSource
 import tachiyomi.i18n.MR
@@ -71,6 +70,7 @@ import tachiyomi.presentation.core.components.material.padding
 import tachiyomi.presentation.core.i18n.stringResource
 import tachiyomi.presentation.core.screens.LoadingScreen
 import tachiyomi.source.local.LocalSource
+import tachiyomi.core.common.i18n.stringResource as i18nStringResource
 
 data class BrowseSourceScreen(
     val sourceId: Long,
