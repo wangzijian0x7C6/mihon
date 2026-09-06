@@ -4,13 +4,21 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.parser.Parser
 import java.io.Closeable
-import java.io.File
 import java.io.InputStream
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 
 /**
  * Wrapper over ArchiveReader to load files in epub format.
  */
-class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
+class EpubReader private constructor(
+    private val inputStreamProvider: (String) -> InputStream?,
+    private val closeAction: () -> Unit,
+) : Closeable {
+
+    constructor(reader: ArchiveReader) : this(reader::getInputStream, reader::close)
+
+    internal constructor(inputStreamProvider: (String) -> InputStream?) : this(inputStreamProvider, {})
 
     /**
      * Path separator used by this epub.
@@ -21,7 +29,7 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
      * Returns an input stream for reading the contents of the specified zip file entry.
      */
     fun getInputStream(entryName: String): InputStream? {
-        return reader.getInputStream(entryName)
+        return inputStreamProvider(entryName)
     }
 
     /**
@@ -30,8 +38,8 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
     fun getImagesFromPages(): List<String> {
         val ref = getPackageHref()
         val doc = getPackageDocument(ref)
-        val pages = getPagesFromDocument(doc)
-        return getImagesFromPages(pages, ref)
+        val readingOrder = getReadingOrder(doc)
+        return getImagesFromReadingOrder(readingOrder, ref)
     }
 
     /**
@@ -41,9 +49,12 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
         val meta = getInputStream(resolveZipPath("META-INF", "container.xml"))
         if (meta != null) {
             val metaDoc = meta.use { Jsoup.parse(it, null, "", Parser.xmlParser()) }
-            val path = metaDoc.getElementsByTag("rootfile").first()?.attr("full-path")
+            val path = metaDoc.getElementsByTag("rootfile")
+                .first()
+                ?.attr("full-path")
+                ?.takeIf(String::isNotBlank)
             if (path != null) {
-                return path
+                return resolveZipPath("", path)
             }
         }
         return resolveZipPath("OEBPS", "content.opf")
@@ -53,41 +64,63 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
      * Returns the package document where all the files are listed.
      */
     fun getPackageDocument(ref: String): Document {
-        return getInputStream(ref)!!.use { Jsoup.parse(it, null, "", Parser.xmlParser()) }
+        val stream = requireNotNull(getInputStream(ref)) { "EPUB package document not found: $ref" }
+        return stream.use { Jsoup.parse(it, null, "", Parser.xmlParser()) }
     }
 
     /**
-     * Returns all the pages from the epub.
+     * Returns all the items in the epub's reading order.
      */
-    private fun getPagesFromDocument(document: Document): List<String> {
-        val pages = document.select("manifest > item")
-            .filter { node -> "application/xhtml+xml" == node.attr("media-type") }
-            .associateBy { it.attr("id") }
-
-        val spine = document.select("spine > itemref").map { it.attr("idref") }
-        return spine.mapNotNull { pages[it] }.map { it.attr("href") }
-    }
-
-    /**
-     * Returns all the images contained in every page from the epub.
-     */
-    private fun getImagesFromPages(pages: List<String>, packageHref: String): List<String> {
-        val result = mutableListOf<String>()
-        val basePath = getParentDirectory(packageHref)
-        pages.forEach { page ->
-            val entryPath = resolveZipPath(basePath, page)
-            val document = getInputStream(entryPath)!!.use { Jsoup.parse(it, null, "") }
-            val imageBasePath = getParentDirectory(entryPath)
-
-            document.allElements.forEach {
-                when (it.tagName()) {
-                    "img" -> result.add(resolveZipPath(imageBasePath, it.attr("src")))
-                    "image" -> result.add(resolveZipPath(imageBasePath, it.attr("xlink:href")))
+    private fun getReadingOrder(document: Document): List<ManifestItem> {
+        val manifest = document.select("manifest > item")
+            .mapNotNull { node ->
+                val id = node.attr("id")
+                val href = node.attr("href")
+                if (id.isBlank() || href.isBlank()) {
+                    null
+                } else {
+                    id to ManifestItem(href, node.attr("media-type"))
                 }
             }
-        }
+            .toMap()
 
-        return result
+        val spine = document.select("spine > itemref").map { it.attr("idref") }
+        return spine.mapNotNull(manifest::get)
+    }
+
+    /**
+     * Returns all images from the epub in spine order. Fixed-layout EPUBs may
+     * reference images directly from the spine instead of wrapping them in XHTML.
+     */
+    private fun getImagesFromReadingOrder(items: List<ManifestItem>, packageHref: String): List<String> {
+        val basePath = getParentDirectory(packageHref)
+        return items.flatMap { item ->
+            val entryPath = resolveZipPath(basePath, item.href)
+            when {
+                item.isPage() -> getImagesFromPage(entryPath)
+                item.isImage() -> listOf(entryPath)
+                else -> emptyList()
+            }
+        }
+    }
+
+    private fun getImagesFromPage(entryPath: String): List<String> {
+        val document = getInputStream(entryPath)?.use { Jsoup.parse(it, null, "") } ?: return emptyList()
+        val imageBasePath = getParentDirectory(entryPath)
+
+        return document.allElements.mapNotNull { element ->
+            val reference = when (element.tagName()) {
+                "img" -> element.attr("src")
+                "image" -> element.attr("href").ifBlank { element.attr("xlink:href") }
+                "object" -> element.attr("data").takeIf {
+                    element.attr("type").startsWith("image/", ignoreCase = true)
+                }
+                else -> null
+            }
+            reference
+                ?.toLocalReferenceOrNull()
+                ?.let { resolveZipPath(imageBasePath, it) }
+        }
     }
 
     /**
@@ -107,19 +140,27 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
      * Resolves a zip path from base and relative components and a path separator.
      */
     private fun resolveZipPath(basePath: String, relativePath: String): String {
-        if (relativePath.startsWith(pathSeparator)) {
-            // Path is absolute, so return as-is.
-            return relativePath
+        val cleanRelativePath = relativePath
+            .substringBefore('#')
+            .substringBefore('?')
+            .decodeUrlPath()
+            .replace('\\', '/')
+        val cleanBasePath = basePath.replace('\\', '/')
+        val combinedPath = if (cleanRelativePath.startsWith('/')) {
+            cleanRelativePath
+        } else {
+            "$cleanBasePath/$cleanRelativePath"
         }
 
-        var fixedBasePath = basePath.replace(pathSeparator, File.separator)
-        if (!fixedBasePath.startsWith(File.separator)) {
-            fixedBasePath = "${File.separator}$fixedBasePath"
+        val resolvedSegments = mutableListOf<String>()
+        combinedPath.split('/').forEach { segment ->
+            when (segment) {
+                "", "." -> Unit
+                ".." -> if (resolvedSegments.isNotEmpty()) resolvedSegments.removeLast()
+                else -> resolvedSegments.add(segment)
+            }
         }
-
-        val fixedRelativePath = relativePath.replace(pathSeparator, File.separator)
-        val resolvedPath = File(fixedBasePath, fixedRelativePath).canonicalPath
-        return resolvedPath.replace(File.separator, pathSeparator).substring(1)
+        return resolvedSegments.joinToString(pathSeparator)
     }
 
     /**
@@ -132,5 +173,45 @@ class EpubReader(private val reader: ArchiveReader) : Closeable by reader {
         } else {
             ""
         }
+    }
+
+    override fun close() = closeAction()
+
+    private data class ManifestItem(
+        val href: String,
+        val mediaType: String,
+    ) {
+        fun isImage(): Boolean {
+            return mediaType.startsWith("image/", ignoreCase = true) ||
+                href.substringAfterLast('.', "").substringBefore('#').substringBefore('?').lowercase() in IMAGE_EXTENSIONS
+        }
+
+        fun isPage(): Boolean {
+            return mediaType.lowercase() in PAGE_MEDIA_TYPES ||
+                href.substringAfterLast('.', "")
+                    .substringBefore('#')
+                    .substringBefore('?')
+                    .lowercase() in PAGE_EXTENSIONS
+        }
+    }
+
+    private fun String.decodeUrlPath(): String {
+        return try {
+            URLDecoder.decode(replace("+", "%2B"), StandardCharsets.UTF_8.name())
+        } catch (_: IllegalArgumentException) {
+            this
+        }
+    }
+
+    private fun String.toLocalReferenceOrNull(): String? {
+        val path = substringBefore('#').substringBefore('?')
+        return path.takeIf { it.isNotBlank() && !it.startsWith("//") && !URI_SCHEME.matches(it) }
+    }
+
+    private companion object {
+        val IMAGE_EXTENSIONS = setOf("avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "jxl", "png", "svg", "webp")
+        val PAGE_EXTENSIONS = setOf("htm", "html", "svg", "xhtml", "xml")
+        val PAGE_MEDIA_TYPES = setOf("application/xhtml+xml", "image/svg+xml", "text/html")
+        val URI_SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:.*")
     }
 }
