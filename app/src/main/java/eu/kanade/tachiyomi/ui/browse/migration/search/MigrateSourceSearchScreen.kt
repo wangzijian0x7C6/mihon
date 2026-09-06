@@ -121,6 +121,7 @@ data class MigrateSourceSearchScreen(
                 },
                 onHelpClick = { uriHandler.openUri(Constants.URL_HELP) },
                 onLocalSourceHelpClick = { uriHandler.openUri(LocalSource.HELP_URL) },
+                onLocalSourceImportClick = null,
                 onMangaClick = openMigrateDialog,
                 onMangaLongClick = { navigator.push(MangaScreen(it.id, true)) },
             )
