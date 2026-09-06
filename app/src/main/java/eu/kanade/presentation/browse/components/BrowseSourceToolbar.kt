@@ -17,6 +17,7 @@ import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.Source
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredrounded.ViewList
+import mihon.icons.materialsymbols.rounded.Add
 import mihon.icons.materialsymbols.rounded.ViewModule
 import tachiyomi.domain.library.model.LibraryDisplayMode
 import tachiyomi.i18n.MR
@@ -33,6 +34,7 @@ fun BrowseSourceToolbar(
     navigateUp: () -> Unit,
     onWebViewClick: () -> Unit,
     onHelpClick: () -> Unit,
+    onImportClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSearch: (String) -> Unit,
     scrollBehavior: TopAppBarScrollBehavior? = null,
@@ -66,6 +68,13 @@ fun BrowseSourceToolbar(
                         ),
                     )
                     if (isLocalSource) {
+                        add(
+                            AppBar.Action(
+                                title = stringResource(MR.strings.action_import_local_manga),
+                                icon = MaterialSymbols.Rounded.Add,
+                                onClick = onImportClick,
+                            ),
+                        )
                         add(
                             AppBar.OverflowAction(
                                 title = stringResource(MR.strings.label_help),

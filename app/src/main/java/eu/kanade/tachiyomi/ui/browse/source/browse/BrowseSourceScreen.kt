@@ -1,5 +1,7 @@
 package eu.kanade.tachiyomi.ui.browse.source.browse
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -20,12 +22,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -34,6 +39,7 @@ import dev.zacsweers.metrox.viewmodel.assistedMetroViewModel
 import eu.kanade.presentation.browse.BrowseSourceContent
 import eu.kanade.presentation.browse.MissingSourceScreen
 import eu.kanade.presentation.browse.components.BrowseSourceToolbar
+import eu.kanade.presentation.browse.components.LocalSourceImportDialog
 import eu.kanade.presentation.browse.components.RemoveMangaDialog
 import eu.kanade.presentation.category.components.ChangeCategoryDialog
 import eu.kanade.presentation.manga.DuplicateMangaDialog
@@ -48,6 +54,7 @@ import eu.kanade.tachiyomi.ui.webview.WebViewScreen
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import mihon.feature.migration.dialog.MigrateMangaDialog
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.rounded.FilterList
@@ -55,6 +62,7 @@ import mihon.icons.materialsymbols.rounded.NewReleases
 import mihon.icons.materialsymbols.roundedfilled.Favorite
 import mihon.presentation.core.util.collectAsLazyPagingItems
 import tachiyomi.core.common.Constants
+import tachiyomi.core.common.i18n.stringResource as i18nStringResource
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.domain.source.model.StubSource
 import tachiyomi.i18n.MR
@@ -104,9 +112,38 @@ data class BrowseSourceScreen(
         }
 
         val scope = rememberCoroutineScope()
+        val context = LocalContext.current
         val haptic = LocalHapticFeedback.current
         val uriHandler = LocalUriHandler.current
         val snackbarHostState = remember { SnackbarHostState() }
+        val mangaList = viewModel.mangaPagerFlowFlow.collectAsLazyPagingItems()
+
+        var showImportDialog by remember { mutableStateOf(false) }
+        var importMangaName by remember { mutableStateOf<String?>(null) }
+        val importFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            val mangaName = importMangaName
+            importMangaName = null
+            val localSource = source as? LocalSource
+            if (uris.isEmpty() || mangaName == null || localSource == null) return@rememberLauncherForActivityResult
+
+            scope.launch {
+                try {
+                    val result = localSource.importChapterFiles(mangaName, uris)
+                    val message = if (result.imported > 0) {
+                        context.i18nStringResource(MR.strings.local_source_import_success, result.imported)
+                    } else {
+                        context.i18nStringResource(MR.strings.local_source_import_unsupported)
+                    }
+                    if (result.imported > 0) mangaList.refresh()
+                    snackbarHostState.showSnackbar(message)
+                } catch (_: Throwable) {
+                    snackbarHostState.showSnackbar(
+                        context.i18nStringResource(MR.strings.local_source_import_failed),
+                    )
+                }
+            }
+        }
+        val onImportClick = { showImportDialog = true }
 
         val onHelpClick = { uriHandler.openUri(LocalSource.HELP_URL) }
         val onWebViewClick = f@{
@@ -140,6 +177,7 @@ data class BrowseSourceScreen(
                         navigateUp = navigateUp,
                         onWebViewClick = onWebViewClick,
                         onHelpClick = onHelpClick,
+                        onImportClick = onImportClick,
                         onSettingsClick = { navigator.push(SourcePreferencesScreen(sourceId)) },
                         onSearch = viewModel::search,
                     )
@@ -214,7 +252,7 @@ data class BrowseSourceScreen(
         ) { paddingValues ->
             BrowseSourceContent(
                 source = source,
-                mangaList = viewModel.mangaPagerFlowFlow.collectAsLazyPagingItems(),
+                mangaList = mangaList,
                 columns = viewModel.getColumnsPreference(LocalConfiguration.current.orientation),
                 displayMode = viewModel.displayMode,
                 snackbarHostState = snackbarHostState,
@@ -222,6 +260,7 @@ data class BrowseSourceScreen(
                 onWebViewClick = onWebViewClick,
                 onHelpClick = { uriHandler.openUri(Constants.URL_HELP) },
                 onLocalSourceHelpClick = onHelpClick,
+                onLocalSourceImportClick = onImportClick,
                 onMangaClick = { navigator.push((MangaScreen(it.id, true))) },
                 onMangaLongClick = { manga ->
                     scope.launchIO {
@@ -235,6 +274,17 @@ data class BrowseSourceScreen(
                         }
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     }
+                },
+            )
+        }
+
+        if (showImportDialog) {
+            LocalSourceImportDialog(
+                onDismissRequest = { showImportDialog = false },
+                onConfirm = { mangaName ->
+                    showImportDialog = false
+                    importMangaName = mangaName
+                    importFiles.launch(LOCAL_SOURCE_IMPORT_MIME_TYPES)
                 },
             )
         }
@@ -315,3 +365,11 @@ data class BrowseSourceScreen(
         class Genre(txt: String) : SearchType(txt)
     }
 }
+
+private val LOCAL_SOURCE_IMPORT_MIME_TYPES = arrayOf(
+    "application/epub+zip",
+    "application/zip",
+    "application/x-cbz",
+    "application/vnd.comicbook+zip",
+    "application/octet-stream",
+)

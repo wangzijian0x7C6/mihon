@@ -320,6 +320,13 @@
     <string name="logout">登出</string>
     <string name="last_used_source">最近使用</string>
     <string name="local_source_help_guide">本機來源指南</string>
+    <string name="action_import_local_manga">匯入本機漫畫</string>
+    <string name="action_choose_files">選擇檔案</string>
+    <string name="local_source_import_manga_name">漫畫名稱</string>
+    <string name="local_source_import_description">選取的 EPUB/CBZ 檔案會複製到這部本機漫畫中，並顯示為章節。</string>
+    <string name="local_source_import_success">已匯入 %1$d 個章節檔案</string>
+    <string name="local_source_import_unsupported">沒有選取支援的 EPUB 或 CBZ 檔案</string>
+    <string name="local_source_import_failed">無法匯入本機漫畫</string>
     <string name="information_webview_outdated">請更新 WebView 以獲得更佳的相容性</string>
     <string name="information_webview_required">應用程式運作需要 WebView</string>
     <string name="action_select_inverse">反向選擇</string>

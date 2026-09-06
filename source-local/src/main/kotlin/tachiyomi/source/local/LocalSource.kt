@@ -1,6 +1,8 @@
 package tachiyomi.source.local
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import com.hippo.unifile.UniFile
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
@@ -76,6 +78,89 @@ class LocalSource(
     override fun toString() = name
 
     override val supportsLatest: Boolean = true
+
+    /**
+     * Copies user-selected EPUB/CBZ files into a manga folder in the local source.
+     * Files keep their display names and are de-duplicated instead of overwritten.
+     */
+    suspend fun importChapterFiles(mangaName: String, uris: List<Uri>): ImportResult = withIOContext {
+        val safeMangaName = sanitizeFileName(mangaName)
+        require(safeMangaName.isNotBlank())
+
+        val baseDirectory = fileSystem.getBaseDirectory()
+            ?: error("Local source directory is unavailable")
+        val existing = baseDirectory.findFile(safeMangaName)
+        val mangaDirectory = when {
+            existing == null -> baseDirectory.createDirectory(safeMangaName)
+            existing.isDirectory -> existing
+            else -> null
+        } ?: error("Unable to create local manga directory")
+
+        var imported = 0
+        var skipped = 0
+
+        uris.forEach { uri ->
+            val displayName = getDisplayName(uri)
+            val extension = displayName.substringAfterLast('.', "").lowercase()
+            if (extension !in IMPORT_EXTENSIONS) {
+                skipped++
+                return@forEach
+            }
+
+            val targetName = findAvailableFileName(mangaDirectory, sanitizeFileName(displayName))
+            val target = mangaDirectory.createFile(targetName)
+                ?: error("Unable to create imported chapter file")
+
+            try {
+                val input = context.contentResolver.openInputStream(uri)
+                    ?: error("Unable to open selected chapter file")
+                input.use { source ->
+                    target.openOutputStream().use(source::copyTo)
+                }
+                imported++
+            } catch (e: Throwable) {
+                target.delete()
+                throw e
+            }
+        }
+
+        ImportResult(imported, skipped)
+    }
+
+    private fun getDisplayName(uri: Uri): String {
+        val queriedName = context.contentResolver
+            .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        return queriedName
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+            ?: "chapter"
+    }
+
+    private fun sanitizeFileName(name: String): String {
+        return name
+            .trim()
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .trim('.')
+    }
+
+    private fun findAvailableFileName(directory: UniFile, requestedName: String): String {
+        if (directory.findFile(requestedName) == null) return requestedName
+
+        val extension = requestedName.substringAfterLast('.', "")
+        val baseName = requestedName.substringBeforeLast('.', requestedName)
+        var index = 2
+        while (true) {
+            val candidate = if (extension.isBlank()) {
+                "$baseName ($index)"
+            } else {
+                "$baseName ($index).$extension"
+            }
+            if (directory.findFile(candidate) == null) return candidate
+            index++
+        }
+    }
 
     // Browse related
     override suspend fun getPopularManga(page: Int) = getSearchManga(page, "", PopularFilters)
@@ -380,9 +465,16 @@ class LocalSource(
         const val ID = 0L
         const val HELP_URL = "https://mihon.app/docs/guides/local-source/"
 
+        private val IMPORT_EXTENSIONS = setOf("epub", "cbz")
+
         private val LATEST_THRESHOLD = 7.days.inWholeMilliseconds
     }
 }
+
+data class ImportResult(
+    val imported: Int,
+    val skipped: Int,
+)
 
 fun Manga.isLocal(): Boolean = source == LocalSource.ID
 
