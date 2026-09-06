@@ -183,7 +183,8 @@ class EpubReader private constructor(
     ) {
         fun isImage(): Boolean {
             return mediaType.startsWith("image/", ignoreCase = true) ||
-                href.substringAfterLast('.', "").substringBefore('#').substringBefore('?').lowercase() in IMAGE_EXTENSIONS
+                href.substringAfterLast('.', "").substringBefore('#').substringBefore('?').lowercase() in
+                IMAGE_EXTENSIONS
         }
 
         fun isPage(): Boolean {
