@@ -124,14 +124,26 @@ data class BrowseSourceScreen(
                 try {
                     val result = importAction()
                     val changed = result.imported + result.updated
-                    val message = if (changed > 0) {
-                        context.i18nStringResource(
-                            MR.strings.local_source_import_success,
-                            result.imported,
-                            result.updated,
-                        )
-                    } else {
-                        context.i18nStringResource(MR.strings.local_source_import_unsupported)
+                    val message = when {
+                        changed > 0 -> buildString {
+                            append(
+                                context.i18nStringResource(
+                                    MR.strings.local_source_import_success,
+                                    result.imported,
+                                    result.updated,
+                                ),
+                            )
+                            if (result.skipped > 0) {
+                                append("\n")
+                                append(
+                                    context.i18nStringResource(
+                                        MR.strings.local_source_import_skipped,
+                                        result.skipped,
+                                    ),
+                                )
+                            }
+                        }
+                        else -> context.i18nStringResource(MR.strings.local_source_import_unsupported)
                     }
                     if (changed > 0) mangaList.refresh()
                     snackbarHostState.showSnackbar(message)

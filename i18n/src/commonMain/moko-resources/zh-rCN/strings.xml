@@ -357,6 +357,7 @@
     <string name="local_source_import_files">选择多个 EPUB/CBZ 文件</string>
     <string name="local_source_import_folder">选择漫画目录</string>
     <string name="local_source_import_success">已新增 %1$d 个、更新 %2$d 个章节文件</string>
+    <string name="local_source_import_skipped">跳过 %1$d 个不受支持或已在库中的文件</string>
     <string name="local_source_import_unsupported">没有选择受支持的 EPUB 或 CBZ 文件</string>
     <string name="local_source_import_failed">无法导入本地漫画</string>
     <string name="last_used_source">最近使用</string>

@@ -732,6 +732,7 @@
     <string name="local_source_import_files">Choose EPUB/CBZ files</string>
     <string name="local_source_import_folder">Choose manga folder</string>
     <string name="local_source_import_success">Imported %1$d and updated %2$d chapter file(s)</string>
+    <string name="local_source_import_skipped">Skipped %1$d unsupported or already present file(s)</string>
     <string name="local_source_import_unsupported">No supported EPUB or CBZ files were selected</string>
     <string name="local_source_import_failed">Could not import local manga</string>
     <string name="no_pinned_sources">You have no pinned sources</string>

@@ -31,4 +31,7 @@ dependencies {
 
     implementation(libs.injekt)
     implementation(libs.jsoup)
+
+    testImplementation(libs.bundles.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

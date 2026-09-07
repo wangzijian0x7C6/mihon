@@ -88,7 +88,7 @@ class LocalSource(
         var result = ImportResult()
         uris.forEach { uri ->
             val displayName = getDisplayName(uri)
-            if (!isSupportedImport(displayName)) {
+            if (!LocalImporter.isSupportedImport(displayName)) {
                 result = result.copy(skipped = result.skipped + 1)
                 return@forEach
             }
@@ -101,7 +101,7 @@ class LocalSource(
                 null
             }
             val fallbackTitle = displayName.substringBeforeLast('.', displayName)
-            val mangaName = sanitizeFileName(metadataTitle ?: fallbackTitle)
+            val mangaName = LocalImporter.sanitizeFileName(metadataTitle ?: fallbackTitle)
                 .takeIf(String::isNotBlank)
                 ?: error("Unable to determine local manga name")
 
@@ -119,11 +119,11 @@ class LocalSource(
         val directory = UniFile.fromUri(context, uri)
             ?.takeIf { it.isDirectory }
             ?: error("Unable to open selected manga directory")
-        val mangaName = sanitizeFileName(directory.name ?: getDisplayName(uri))
+        val mangaName = LocalImporter.sanitizeFileName(directory.name ?: getDisplayName(uri))
             .takeIf(String::isNotBlank)
             ?: error("Unable to determine local manga name")
         val files = directory.listFiles().orEmpty()
-            .filter { !it.isDirectory && isSupportedImport(it.name.orEmpty()) }
+            .filter { !it.isDirectory && LocalImporter.isSupportedImport(it.name.orEmpty()) }
             .map { it to it.name.orEmpty() }
 
         if (files.isEmpty()) {
@@ -143,27 +143,7 @@ class LocalSource(
             else -> null
         } ?: error("Unable to create local manga directory")
 
-        var imported = 0
-        var updated = 0
-        files.forEach { (source, sourceName) ->
-            val targetName = sanitizeFileName(sourceName)
-            if (targetName.isBlank() || !isSupportedImport(targetName)) return@forEach
-
-            val existingFile = mangaDirectory.findFile(targetName)
-            val target = existingFile ?: mangaDirectory.createFile(targetName)
-                ?: error("Unable to create imported chapter file")
-            try {
-                source.openInputStream().use { input ->
-                    target.openOutputStream().use(input::copyTo)
-                }
-                if (existingFile == null) imported++ else updated++
-            } catch (e: Throwable) {
-                if (existingFile == null) target.delete()
-                throw e
-            }
-        }
-
-        return ImportResult(imported = imported, updated = updated, manga = 1)
+        return LocalImporter.importInto(mangaDirectory, files)
     }
 
     private fun getDisplayName(uri: Uri): String {
@@ -175,17 +155,6 @@ class LocalSource(
         return queriedName
             ?: uri.lastPathSegment?.substringAfterLast('/')
             ?: "chapter"
-    }
-
-    private fun sanitizeFileName(name: String): String {
-        return name
-            .trim()
-            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            .trim('.')
-    }
-
-    private fun isSupportedImport(name: String): Boolean {
-        return name.substringAfterLast('.', "").lowercase() in IMPORT_EXTENSIONS
     }
 
     // Browse related
@@ -490,8 +459,6 @@ class LocalSource(
     companion object {
         const val ID = 0L
         const val HELP_URL = "https://mihon.app/docs/guides/local-source/"
-
-        private val IMPORT_EXTENSIONS = setOf("epub", "cbz")
 
         private val LATEST_THRESHOLD = 7.days.inWholeMilliseconds
     }

@@ -325,6 +325,7 @@
     <string name="local_source_import_files">選擇多個 EPUB/CBZ 檔案</string>
     <string name="local_source_import_folder">選擇漫畫資料夾</string>
     <string name="local_source_import_success">已新增 %1$d 個、更新 %2$d 個章節檔案</string>
+    <string name="local_source_import_skipped">已跳過 %1$d 個不受支援或已在庫中的檔案</string>
     <string name="local_source_import_unsupported">沒有選取支援的 EPUB 或 CBZ 檔案</string>
     <string name="local_source_import_failed">無法匯入本機漫畫</string>
     <string name="information_webview_outdated">請更新 WebView 以獲得更佳的相容性</string>
